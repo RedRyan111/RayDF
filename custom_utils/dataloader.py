@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from utils.ray import get_rays_np
+from custom_utils.ray import get_rays_np
 from data import load_blender, load_dmsr, load_scannet
 
 EPS = 1e-8

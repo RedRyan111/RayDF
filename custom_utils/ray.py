@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from utils.math import *
+from custom_utils.math import *
 
 EPS = 1e-8
 

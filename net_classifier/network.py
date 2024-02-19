@@ -2,8 +2,8 @@ import os
 import torch
 import torch.nn as nn
 
-from utils.ray import get_rayparam_func
-from utils.layer import Siren
+from custom_utils.ray import get_rayparam_func
+from custom_utils.layer import Siren
 
 EPS = 1e-8
 

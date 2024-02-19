@@ -7,9 +7,9 @@ import torch.nn.functional as F
 import wandb
 from wandb import AlertLevel
 
-from utils.dataloader import Dataloader
-from utils import log
-from utils.ray import get_ray_param
+from custom_utils.dataloader import Dataloader
+from custom_utils import log
+from custom_utils.ray import get_ray_param
 from net_classifier.network import create_classifier
 from net_classifier.sampler import get_reference_rays
 
@@ -34,7 +34,18 @@ def train(args):
     binary_f1 = BinaryF1Score(args.vis_thres).to(device)
 
     # Create experiment logger
-    wandb.init(project="RayDF-Classifier")
+   # wandb.init(project="RayDF-Classifier")
+
+    wandb.init(
+        # set the wandb project where this run will be logged
+        project="RayDF",
+
+        # track hyperparameters and run metadata
+        config={
+            'lr': .02
+        }
+    )
+
     wandb.run.name = args.expname
     wandb.watch(model, log="all")
 

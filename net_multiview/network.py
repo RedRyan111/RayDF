@@ -5,8 +5,8 @@ import sys
 sys.path.append('../')
 
 from net_classifier.network import DualVisClassifier
-from utils.layer import Siren
-from utils.ray import get_rayparam_func
+from custom_utils.layer import Siren
+from custom_utils.ray import get_rayparam_func
 
 EPS = 1e-8
 

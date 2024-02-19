@@ -1,0 +1,7 @@
+/.idea
+/datasets
+/__pycache__
+/wandb
+/data
+/logs
+*.pyc
