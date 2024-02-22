@@ -18,8 +18,25 @@ torch.backends.cudnn.benchmark = True
 np.random.seed(0)
 
 from torchmetrics.classification import BinaryAccuracy, BinaryF1Score
+
 binary_acc = BinaryAccuracy().to(device)
 binary_f1 = BinaryF1Score().to(device)
+
+
+def get_cls_outputs(ray_fn, ref_rays, batch_inputs, target_dict, model):
+    ref_inputs, _, _ = get_ray_param(ray_fn, ref_rays)
+    cls_inputs = [batch_inputs[:, None].expand_as(ref_inputs), ref_inputs,
+                  target_dict['pts_norm'][:, None].expand_as(ref_inputs[..., :3])]
+    cls_outputs = {'vis': model(cls_inputs)}
+    cls_outputs['vis_score'] = torch.sigmoid(cls_outputs['vis'])
+    return cls_outputs
+
+
+def normalize_query_surface_point(batch_rays, target_dict, dataloader):
+    batch_pts = batch_rays[..., :3] + target_dict['dist'] * batch_rays[..., 3:]
+    for c in range(batch_pts.shape[-1]):
+        batch_pts[..., c] -= dataloader.scene_info['sphere_center'][c]
+    target_dict['pts_norm'] = batch_pts / dataloader.scene_info['sphere_radius']
 
 
 def train(args):
@@ -34,18 +51,7 @@ def train(args):
     binary_f1 = BinaryF1Score(args.vis_thres).to(device)
 
     # Create experiment logger
-   # wandb.init(project="RayDF-Classifier")
-
-    wandb.init(
-        # set the wandb project where this run will be logged
-        project="RayDF",
-
-        # track hyperparameters and run metadata
-        config={
-            'lr': .02
-        }
-    )
-
+    wandb.init(project="RayDF")
     wandb.run.name = args.expname
     wandb.watch(model, log="all")
 
@@ -56,8 +62,8 @@ def train(args):
 
     for i in trange(start, args.N_iters):
         optimizer.zero_grad()
-        j = (i-start) % step_batch
-        ep = (i-start) // step_batch
+        j = (i - start) % step_batch
+        ep = (i - start) // step_batch
         # re-random train indices at the start of each epoch
         if j == 0 and i != start:
             inds = np.random.permutation(train_num)
@@ -71,24 +77,18 @@ def train(args):
         batch_inputs, _, _ = get_ray_param(ray_fn, batch_rays)
 
         # normalize query surface point
-        batch_pts = batch_rays[..., :3] + target_dict['dist'] * batch_rays[..., 3:]
-        for c in range(batch_pts.shape[-1]):
-            batch_pts[..., c] -= dataloader.scene_info['sphere_center'][c]
-        target_dict['pts_norm'] = batch_pts / dataloader.scene_info['sphere_radius']
+        normalize_query_surface_point(batch_rays, target_dict, dataloader)  # edits target_dict in-place
 
         # ================= Reference Rays for Visibility Classifier =====================
         ref_rays, cls_targets = get_reference_rays(args, batch_rays, target_dict['dist'],
                                                    dataloader.all_dists[dataloader.i_train],
                                                    dataloader.cam_poses[dataloader.i_train],
                                                    dataloader.scene_info)
-        ref_inputs, _, _ = get_ray_param(ray_fn, ref_rays)
-        cls_inputs = [batch_inputs[:, None].expand_as(ref_inputs), ref_inputs,
-                      target_dict['pts_norm'][:, None].expand_as(ref_inputs[..., :3])]
-        cls_outputs = {'vis': model(cls_inputs)}
-        cls_outputs['vis_score'] = torch.sigmoid(cls_outputs['vis'])
+
+        cls_outputs = get_cls_outputs(ray_fn, ref_rays, batch_inputs, target_dict, model)
 
         # ================= Optimization =====================
-        pos_weight = args.pos_weight if args.pos_weight > 0 else (cls_targets==0).sum()/(cls_targets==1).sum()
+        pos_weight = args.pos_weight if args.pos_weight > 0 else (cls_targets == 0).sum() / (cls_targets == 1).sum()
         pos_weight = torch.tensor([pos_weight]).to(device)
         loss = F.binary_cross_entropy_with_logits(cls_outputs['vis'], cls_targets, pos_weight=pos_weight)
         loss.backward()
@@ -98,7 +98,6 @@ def train(args):
         optimizer.step()
         new_lrate = optimizer.param_groups[0]['lr']
         scheduler.step()
-
 
         # ================= Logging ==========================
         if i % args.i_print == 0 and i != 0:
@@ -147,13 +146,8 @@ def eval(args, batch_rays, batch_inputs, target_dict, dataloader, ray_fn, model,
         ref_rays, cls_targets = get_reference_rays(args, batch_rays, target_dict['dist'],
                                                    dataloader.all_dists[i_split], dataloader.cam_poses[i_split],
                                                    dataloader.scene_info)
-        ref_inputs, _, _ = get_ray_param(ray_fn, ref_rays)
-        cls_inputs = [batch_inputs[:, None].expand_as(ref_inputs),
-                      ref_inputs,
-                      target_dict['pts_norm'][:, None].expand_as(ref_inputs[..., :3])]
 
-        cls_outputs = {'vis': model(cls_inputs)}
-        cls_outputs['vis_score'] = torch.sigmoid(cls_outputs['vis'])
+        cls_outputs = get_cls_outputs(ray_fn, ref_rays, batch_inputs, target_dict, model)
 
         acc = binary_acc(cls_outputs['vis_score'], cls_targets)
         f1 = binary_f1(cls_outputs['vis_score'], cls_targets)
@@ -197,15 +191,12 @@ def evaluate(args):
         inds = np.arange(train_num)
 
         for j in trange(0, train_num, args.N_rand):
-            train_i = inds[j:j+args.N_rand]
+            train_i = inds[j:j + args.N_rand]
             batch_rays, target_dict = dataloader(inds=train_i, mode=split)
             batch_inputs, _, _ = get_ray_param(ray_fn, batch_rays)
 
             # normalize query surface point
-            batch_pts = batch_rays[..., :3] + target_dict['dist'] * batch_rays[..., 3:]
-            for c in range(batch_pts.shape[-1]):
-                batch_pts[..., c] -= dataloader.scene_info['sphere_center'][c]
-            target_dict['pts_norm'] = batch_pts / dataloader.scene_info['sphere_radius']
+            normalize_query_surface_point(batch_rays, target_dict, dataloader)
 
             acc, f1 = eval(args, batch_rays, batch_inputs, target_dict,
                            dataloader, ray_fn, model, i_split, mode=split)
@@ -227,7 +218,7 @@ if __name__ == '__main__':
 
     if args.expname == '':
         args.expname = f'd{args.netdepth_cls}w{args.netwidth_cls}ext{args.ext_layer_cls}pw{str(args.pos_weight)}' \
-                       f'_lr{str(args.lrate)}bs{args.N_rand}iters{int(args.N_iters/1000)}k'
+                       f'_lr{str(args.lrate)}bs{args.N_rand}iters{int(args.N_iters / 1000)}k'
     args.expname = f'{args.dataset}-{args.scene}_{args.expname}'
     args.datadir = os.path.join(args.datadir, args.dataset, args.scene)
 
@@ -236,4 +227,3 @@ if __name__ == '__main__':
         train(args)
     else:
         evaluate(args)
-
